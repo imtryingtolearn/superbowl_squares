@@ -18,6 +18,15 @@ import db
 import game_logic
 import security
 
+_GLOBAL_CSS = """
+<style>
+/* Slight rounding for Streamlit containers to make the UI feel softer. */
+div[data-testid="stElementContainer"] {
+  border-radius: 0.85rem;
+}
+</style>
+"""
+
 _GRID_CSS = """
 <style>
 __SCOPE__ { width: 100%; }
@@ -615,16 +624,16 @@ def page_home(user: db.User | None):
                 )
         st.dataframe(pd.DataFrame(winners), use_container_width=True, hide_index=True)
 
-    st.subheader("Recent activity")
-    with db.db() as conn:
-        rows = db.recent_audit(conn, limit=15)
-    if not rows:
-        st.caption("No activity yet.")
-    else:
-        for r in rows:
-            actor = r["actor_display_name"] or "Someone"
-            details = json.loads(r["details_json"]) if r["details_json"] else {}
-            st.write(f"- {_ts_to_str(int(r['created_at_ts']))}: {actor} {r['action']} {details}")
+    with st.expander("Recent activity", expanded=False):
+        with db.db() as conn:
+            rows = db.recent_audit(conn, limit=15)
+        if not rows:
+            st.caption("No activity yet.")
+        else:
+            for r in rows:
+                actor = r["actor_display_name"] or "Someone"
+                details = json.loads(r["details_json"]) if r["details_json"] else {}
+                st.write(f"- {_ts_to_str(int(r['created_at_ts']))}: {actor} {r['action']} {details}")
 
 
 def page_pick_boxes(user: db.User):
@@ -1062,6 +1071,7 @@ def main():
         load_dotenv(Path(__file__).resolve().parent / ".env")
 
     st.set_page_config(page_title="Super Bowl Squares", layout="wide")
+    st.markdown(_GLOBAL_CSS, unsafe_allow_html=True)
 
     # Streamlit secrets → env bridge (so `db.py` can read DATABASE_URL / admin creds).
     try:

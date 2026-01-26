@@ -563,6 +563,15 @@ def is_username_taken_error(exc: Exception) -> bool:
     return False
 
 
+def get_state_version(conn: Any) -> str:
+    squares_ts = _fetchone(conn, "SELECT COALESCE(MAX(updated_at_ts), 0) AS v FROM squares") or {"v": 0}
+    settings_ts = _fetchone(conn, "SELECT COALESCE(MAX(updated_at_ts), 0) AS v FROM settings") or {"v": 0}
+    scores_ts = _fetchone(conn, "SELECT COALESCE(MAX(updated_at_ts), 0) AS v FROM scores") or {"v": 0}
+    audit_id = _fetchone(conn, "SELECT COALESCE(MAX(id), 0) AS v FROM audit_log") or {"v": 0}
+    users_id = _fetchone(conn, "SELECT COALESCE(MAX(id), 0) AS v FROM users") or {"v": 0}
+    return f"{int(squares_ts['v'])}-{int(settings_ts['v'])}-{int(scores_ts['v'])}-{int(audit_id['v'])}-{int(users_id['v'])}"
+
+
 def ensure_admin_from_env(conn: Any) -> int | None:
     username = (os.getenv("SUPERBOWL_ADMIN_USERNAME") or "").strip().lower()
     password = os.getenv("SUPERBOWL_ADMIN_PASSWORD") or ""

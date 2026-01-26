@@ -347,7 +347,13 @@ def render_board_grid(
 
 def load_state():
     with db.db() as conn:
-        db.init_db(conn)
+        version = db.get_state_version(conn)
+    return _load_state_cached(version)
+
+
+@st.cache_data(show_spinner=False)
+def _load_state_cached(_version: str):
+    with db.db() as conn:
         settings = {
             "team_columns": db.get_setting(conn, "team_columns"),
             "team_rows": db.get_setting(conn, "team_rows"),
@@ -1048,14 +1054,14 @@ def page_admin(user: db.User):
         else:
             st.caption("Danger zone: deletes the DB file and starts fresh (users + board + history).")
             confirm = st.text_input("Type RESET to confirm", value="", placeholder="RESET")
-            if st.button("Delete DB file and recreate", type="primary", disabled=(confirm.strip() != "RESET")):
-                # Clear session so we don't keep a stale user_id.
-                for k in ("user_id", "nav_page", "home_selected_square_ids", "selected_square_ids"):
-                    st.session_state.pop(k, None)
+        if st.button("Delete DB file and recreate", type="primary", disabled=(confirm.strip() != "RESET")):
+            # Clear session so we don't keep a stale user_id.
+            for k in ("user_id", "nav_page", "home_selected_square_ids", "selected_square_ids", "_sb_bootstrap_done"):
+                st.session_state.pop(k, None)
 
-                paths = [db_file]
-                for suffix in ("-wal", "-shm", "-journal"):
-                    paths.append(Path(str(db_file) + suffix))
+            paths = [db_file]
+            for suffix in ("-wal", "-shm", "-journal"):
+                paths.append(Path(str(db_file) + suffix))
                 for p in paths:
                     try:
                         if p.exists():
@@ -1092,10 +1098,12 @@ def main():
     except Exception:
         pass
 
-    # Initialize DB early (creates file + tables)
-    with db.db() as conn:
-        db.init_db(conn)
-        db.ensure_admin_from_env(conn)
+    # Initialize DB once per session (schema + admin bootstrap).
+    if not st.session_state.get("_sb_bootstrap_done"):
+        with db.db() as conn:
+            db.init_db(conn)
+            db.ensure_admin_from_env(conn)
+        st.session_state["_sb_bootstrap_done"] = True
 
     user = None
     if st.session_state.get("user_id"):

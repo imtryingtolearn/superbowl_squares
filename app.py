@@ -141,7 +141,8 @@ __SCOPE__ button[data-testid="baseButton-tertiary"] {
 
 /* Make the empty/open marker look centered and subtle */
 __SCOPE__ button[data-testid="baseButton-tertiary"] {
-  color: #64748B !important;
+  color: #334155 !important;
+  font-size: clamp(1.35rem, 4.2vw, 1.7rem) !important;
 }
 
 /* Yours (primary) */
@@ -201,7 +202,7 @@ def _short_name(name: str) -> str:
 def _cell_label(name: str) -> str:
     first = (name or "").strip().split(" ")[0] if name else ""
     if not first:
-        return "·"
+        return "☐"
     return first[:6]
 
 
@@ -253,8 +254,8 @@ def render_board_grid(
     container = st.container()
 
     square_map = {int(s["id"]): s for s in squares}
-    row_labels = row_digits if row_digits else list(range(10))
-    col_labels = col_digits if col_digits else list(range(10))
+    row_labels = row_digits if row_digits else ["?"] * 10
+    col_labels = col_digits if col_digits else ["?"] * 10
     selected_ids = selected_ids or set()
 
     container.markdown(f"<div id='{scope_id}'></div>", unsafe_allow_html=True)
@@ -319,7 +320,7 @@ def render_board_grid(
                     help_txt = owner_name
                     button_type = "secondary"
             else:
-                label = "✓" if (is_selected and can_toggle_open and not click_to_claim) else "·"
+                label = "✓" if (is_selected and can_toggle_open and not click_to_claim) else "☐"
                 if click_to_claim:
                     help_txt = "Click to claim"
                 elif can_toggle_open:

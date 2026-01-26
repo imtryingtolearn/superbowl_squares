@@ -333,7 +333,7 @@ def page_auth():
 
     with tab1:
         with st.form("login"):
-            username = st.text_input("Username", placeholder="tejas", key="login_username")
+            username = st.text_input("Username", placeholder="username", key="login_username")
             password = st.text_input("Password", type="password", key="login_password")
             submitted = st.form_submit_button("Sign in")
         if submitted:
@@ -358,8 +358,8 @@ def page_auth():
     with tab2:
         st.caption("Keep it simple: pick a username your friends will recognize.")
         with st.form("register"):
-            username = st.text_input("Username", placeholder="tejas", key="register_username")
-            display_name = st.text_input("Display name", placeholder="Tejas", key="register_display_name")
+            username = st.text_input("Username", placeholder="username", key="register_username")
+            display_name = st.text_input("Display name", placeholder="User", key="register_display_name")
             password = st.text_input("Password", type="password", key="register_password")
             password2 = st.text_input("Confirm password", type="password", key="register_password2")
             submitted = st.form_submit_button("Create account")

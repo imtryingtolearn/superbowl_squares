@@ -27,6 +27,17 @@ __SCOPE__ [data-testid="column"] { padding: 0 !important; }
 __SCOPE__ div[data-testid="stButton"] { margin: 0 !important; }
 __SCOPE__ [data-testid="stElementContainer"] { width: 100% !important; max-width: 100% !important; }
 
+__SCOPE__ .sb-grid-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 0.35rem;
+}
+__SCOPE__ .sb-grid-inner { width: max-content; }
+__SCOPE__ .sb-grid-inner [data-testid="stHorizontalBlock"] { width: max-content !important; flex-wrap: nowrap !important; }
+__SCOPE__ .sb-grid-inner [data-testid="column"] { min-width: var(--sb-cell) !important; }
+
 __SCOPE__ .team-top {
   font-weight: 900;
   letter-spacing: 0.02em;
@@ -53,6 +64,17 @@ __SCOPE__ .team-side {
   transform: rotate(-90deg);
   color: #0B0F19;
   white-space: nowrap;
+}
+__SCOPE__ .team-side-mobile {
+  display: none;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: clamp(1.0rem, 4.5vw, 1.5rem);
+  line-height: 1.1;
+  text-align: center;
+  color: #0B0F19;
+  margin: 0.1rem 0 0.45rem 0;
 }
 
 __SCOPE__ .digit {
@@ -140,6 +162,17 @@ __SCOPE__ button:disabled {
   background: #F3F4F6;
   color: #6B7280;
 }
+
+@media (max-width: 640px) {
+  __SCOPE__ { --sb-cell: clamp(2.25rem, 10vw, 2.75rem); --sb-gap: 0.16rem; }
+  __SCOPE__ [data-testid="stHorizontalBlock"] { gap: 0.16rem !important; }
+  __SCOPE__ .team-top { font-size: clamp(1.25rem, 7vw, 2.0rem); }
+  __SCOPE__ .team-side-wrap { display: none; }
+  __SCOPE__ .team-side-mobile { display: block; }
+  __SCOPE__ button { border-radius: 0.5rem !important; }
+  __SCOPE__ .digit { border-radius: 0.5rem; }
+  __SCOPE__ .sb-grid-scroll { padding-bottom: 0.25rem; }
+}
 </style>
 """
 
@@ -222,6 +255,7 @@ def render_board_grid(
     # - team_columns as a big title centered above
     # - team_rows as a big vertical title on the left
     container.markdown(f"<div class='team-top'>{team_columns}</div>", unsafe_allow_html=True)
+    container.markdown(f"<div class='team-side-mobile'>{team_rows}</div>", unsafe_allow_html=True)
 
     outer = container.columns([0.7, 11.3])
     outer[0].markdown(
@@ -230,6 +264,7 @@ def render_board_grid(
     )
 
     grid = outer[1]
+    grid.markdown("<div class='sb-grid-scroll'><div class='sb-grid-inner'>", unsafe_allow_html=True)
     header = grid.columns([0.72] + [1] * 10)
     header[0].markdown("<div class='corner'></div>", unsafe_allow_html=True)
     for c in range(10):
@@ -297,6 +332,7 @@ def render_board_grid(
                 on_claim(int(sq_id))
             if clicked and (not click_to_claim) and on_toggle_select and can_toggle:
                 on_toggle_select(int(sq_id))
+    grid.markdown("</div></div>", unsafe_allow_html=True)
 
 
 def load_state():

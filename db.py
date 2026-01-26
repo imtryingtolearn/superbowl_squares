@@ -594,7 +594,6 @@ def ensure_admin_from_env(conn: Any) -> int | None:
             password_hash_b64=hash_b64,
             is_admin=True,
         )
-        log_action(conn, user_id, "bootstrap_admin", {"username": username})
         return user_id
 
     user_id = int(row["id"])
@@ -615,5 +614,4 @@ def ensure_admin_from_env(conn: Any) -> int | None:
             "id": user_id,
         },
     )
-    log_action(conn, user_id, "bootstrap_admin_update", {"username": username})
     return user_id

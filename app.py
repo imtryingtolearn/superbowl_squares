@@ -27,6 +27,11 @@ div[data-testid="stElementContainer"] {
 </style>
 """
 
+def _audit_ids(ids: list[int], limit: int = 25) -> dict:
+    ids = [int(x) for x in ids]
+    return {"count": len(ids), "ids": ids[:limit], "truncated": (len(ids) > limit)}
+
+
 _GRID_CSS = """
 <style>
 __SCOPE__ { width: 100%; }
@@ -403,7 +408,6 @@ def page_auth():
                     st.stop()
                 st.session_state["user_id"] = int(row["id"])
                 st.session_state["nav_page"] = "Home"
-                db.log_action(conn, int(row["id"]), "login", {})
             st.success("Signed in.")
             st.rerun()
 
@@ -452,9 +456,8 @@ def page_auth():
                         st.error("That username is taken.")
                         st.stop()
                     raise
-                db.log_action(conn, user_id, "register", {"is_admin": is_admin})
-                st.session_state["user_id"] = user_id
-                st.session_state["nav_page"] = "Home"
+            st.session_state["user_id"] = user_id
+            st.session_state["nav_page"] = "Home"
             st.success("Account created.")
             st.rerun()
 
@@ -549,6 +552,13 @@ def page_home(user: db.User | None):
             skipped_due_to_limit: list[int] = []
             with db.db() as conn:
                 db.init_db(conn)
+                # Log selection intent (one row), not every click.
+                db.log_action(
+                    conn,
+                    user.id,
+                    "select_squares",
+                    {"claim": _audit_ids(selected_open), "release": _audit_ids(selected_mine)},
+                )
                 # Enforce the cap at write-time too.
                 current_owned_db = db.count_user_squares(conn, user.id)
                 max_setting = max_boxes_per_user
@@ -566,7 +576,6 @@ def page_home(user: db.User | None):
                         skipped.append(sq_id)
                         continue
                     db.set_square_owner(conn, sq_id, user.id)
-                    db.log_action(conn, user.id, "claim_square", {"square_id": sq_id})
                     claimed_ids.append(sq_id)
                     remaining_slots -= 1
                 for sq_id in selected_mine:
@@ -575,8 +584,19 @@ def page_home(user: db.User | None):
                         skipped.append(sq_id)
                         continue
                     db.set_square_owner(conn, sq_id, None)
-                    db.log_action(conn, user.id, "release_square", {"square_id": sq_id})
                     released_ids.append(sq_id)
+                if claimed_ids or released_ids:
+                    db.log_action(
+                        conn,
+                        user.id,
+                        "update_boxes",
+                        {
+                            "claimed": _audit_ids(claimed_ids),
+                            "released": _audit_ids(released_ids),
+                            "skipped": _audit_ids(skipped),
+                            "skipped_due_to_limit": _audit_ids(skipped_due_to_limit),
+                        },
+                    )
 
             st.session_state["home_selected_square_ids"] = []
             msg = []
@@ -704,14 +724,21 @@ def page_pick_boxes(user: db.User):
         already_taken: list[int] = []
         with db.db() as conn:
             db.init_db(conn)
+            db.log_action(conn, user.id, "select_squares", {"claim": _audit_ids(sorted(selected_ids)), "release": _audit_ids([])})
             for sq_id in sorted(selected_ids):
                 owner = db.get_square_owner_user_id(conn, sq_id)
                 if owner is not None:
                     already_taken.append(sq_id)
                     continue
                 db.set_square_owner(conn, sq_id, user.id)
-                db.log_action(conn, user.id, "claim_square", {"square_id": sq_id})
                 claimed.append(sq_id)
+            if claimed:
+                db.log_action(
+                    conn,
+                    user.id,
+                    "update_boxes",
+                    {"claimed": _audit_ids(claimed), "released": _audit_ids([]), "already_taken": _audit_ids(already_taken)},
+                )
         st.session_state["selected_square_ids"] = []
         if claimed and not already_taken:
             st.session_state["flash_message"] = f"Claimed {len(claimed)} square(s)."
@@ -774,7 +801,7 @@ def page_my_boxes(user: db.User):
                 st.error("That square is not yours anymore.")
                 st.stop()
             db.set_square_owner(conn, sq_id, None)
-            db.log_action(conn, user.id, "release_square", {"square_id": sq_id})
+            db.log_action(conn, user.id, "update_boxes", {"claimed": _audit_ids([]), "released": _audit_ids([sq_id])})
         st.success("Released.")
         st.rerun()
 
@@ -819,12 +846,6 @@ def page_scores(user: db.User | None):
         with db.db() as conn:
             db.init_db(conn)
             db.set_score(conn, quarter=int(quarter), rows_score=int(rows_score), cols_score=int(cols_score), updated_by_user_id=user.id)
-            db.log_action(
-                conn,
-                user.id,
-                "update_score",
-                {"quarter": int(quarter), "rows_score": int(rows_score), "cols_score": int(cols_score)},
-            )
         st.success("Saved.")
         st.rerun()
 
@@ -881,18 +902,6 @@ def page_admin(user: db.User):
             db.set_setting(conn, "price_per_square", str(int(price)))
             db.set_setting(conn, "max_boxes_per_user", str(int(max_boxes)))
             db.set_setting(conn, "board_locked", "1" if board_locked else "0")
-            db.log_action(
-                conn,
-                user.id,
-                "update_settings",
-                {
-                    "team_rows": team_rows,
-                    "team_columns": team_cols,
-                    "price": int(price),
-                    "max_boxes_per_user": int(max_boxes),
-                    "board_locked": board_locked,
-                },
-            )
         st.success("Saved.")
         st.rerun()
 
@@ -915,7 +924,6 @@ def page_admin(user: db.User):
                 db.init_db(conn)
                 db.set_setting(conn, "row_digits_json", game_logic.digits_to_json(rd))
                 db.set_setting(conn, "col_digits_json", game_logic.digits_to_json(cd))
-                db.log_action(conn, user.id, "assign_digits", {"row_digits": rd, "col_digits": cd})
             st.success("Digits assigned.")
             st.rerun()
     with c2:
@@ -930,7 +938,6 @@ def page_admin(user: db.User):
                 db.init_db(conn)
                 db.set_setting(conn, "row_digits_json", game_logic.digits_to_json(rd))
                 db.set_setting(conn, "col_digits_json", game_logic.digits_to_json(cd))
-                db.log_action(conn, user.id, "assign_digits_rows_only", {"row_digits": rd, "col_digits": cd})
             st.success("Rows digits randomized.")
             st.rerun()
     with c3:
@@ -945,7 +952,6 @@ def page_admin(user: db.User):
                 db.init_db(conn)
                 db.set_setting(conn, "row_digits_json", game_logic.digits_to_json(rd))
                 db.set_setting(conn, "col_digits_json", game_logic.digits_to_json(cd))
-                db.log_action(conn, user.id, "assign_digits_cols_only", {"row_digits": rd, "col_digits": cd})
             st.success("Columns digits randomized.")
             st.rerun()
 
@@ -956,7 +962,6 @@ def page_admin(user: db.User):
             db.init_db(conn)
             db.set_setting(conn, "row_digits_json", "")
             db.set_setting(conn, "col_digits_json", "")
-            db.log_action(conn, user.id, "clear_digits", {})
         st.success("Cleared.")
         st.rerun()
 
@@ -983,8 +988,14 @@ def page_admin(user: db.User):
                 owner_id = int(new_owner.split("id=")[-1].rstrip(")"))
             with db.db() as conn:
                 db.init_db(conn)
+                prev_owner = db.get_square_owner_user_id(conn, sq_id)
                 db.set_square_owner(conn, sq_id, owner_id)
-                db.log_action(conn, user.id, "reassign_square", {"square_id": sq_id, "new_owner_user_id": owner_id})
+                db.log_action(
+                    conn,
+                    user.id,
+                    "update_boxes",
+                    {"square_id": sq_id, "previous_owner_user_id": prev_owner, "new_owner_user_id": owner_id},
+                )
             st.success("Done.")
             st.rerun()
 
@@ -994,7 +1005,7 @@ def page_admin(user: db.User):
         with db.db() as conn:
             db.init_db(conn)
             db.reset_board_keep_users(conn)
-            db.log_action(conn, user.id, "reset_board", {})
+            db.log_action(conn, user.id, "update_boxes", {"reset_board": True})
         st.success("Reset complete.")
         st.rerun()
 
@@ -1033,7 +1044,6 @@ def page_admin(user: db.User):
             if st.button("VACUUM / optimize", use_container_width=True, disabled=vacuum_disabled):
                 with db.db() as conn:
                     db.vacuum_optimize(conn)
-                    db.log_action(conn, user.id, "db_vacuum", {})
                 st.success("Database optimized.")
                 st.rerun()
             if vacuum_disabled:
@@ -1044,7 +1054,6 @@ def page_admin(user: db.User):
                 with db.db() as conn:
                     db.init_db(conn)
                     db.prune_audit_log(conn, keep_last=int(keep_audit))
-                    db.log_action(conn, user.id, "prune_audit_log", {"keep": int(keep_audit)})
                 st.success("Audit log pruned.")
                 st.rerun()
 

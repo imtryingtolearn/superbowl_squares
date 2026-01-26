@@ -21,6 +21,22 @@ streamlit run app.py
 ```
 
 The SQLite DB lives at `superbowl_squares/data/squares.db` by default.
+On Streamlit Community Cloud (and other hosted setups), the repo directory may be read-only; the app will automatically fall back to a writable location (home directory or `/tmp`). You can also set `SUPERBOWL_SQUARES_DB_PATH` in Streamlit Secrets.
+
+## Neon / Postgres (recommended for Streamlit Cloud)
+
+Streamlit Community Cloud file storage can be wiped/recreated on redeploys, so for a game you care about, use a hosted DB.
+
+1. In Neon: create a project + database and copy the connection string.
+2. In Streamlit Cloud → your app → **Settings → Secrets**, add:
+   - `DATABASE_URL="postgresql://..."`
+   - `SUPERBOWL_ADMIN_USERNAME="tejas"`
+   - `SUPERBOWL_ADMIN_PASSWORD="..."`
+   - (optional) `SUPERBOWL_ADMIN_DISPLAY_NAME="Tejas"`
+
+Notes:
+- Include `sslmode=require` in the URL if Neon provides it (the app will also default it on).
+- Admin → Database tools will disable SQLite-only actions when using Postgres.
 
 ## Admin setup
 

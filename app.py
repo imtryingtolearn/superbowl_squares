@@ -396,9 +396,7 @@ def page_auth():
                         is_admin=is_admin,
                     )
                 except Exception as e:
-                    import sqlite3
-
-                    if isinstance(e, sqlite3.IntegrityError):
+                    if db.is_username_taken_error(e):
                         st.error("That username is taken.")
                         st.stop()
                     raise
@@ -500,9 +498,7 @@ def page_home(user: db.User | None):
             with db.db() as conn:
                 db.init_db(conn)
                 # Enforce the cap at write-time too.
-                current_owned_db = int(
-                    conn.execute("SELECT COUNT(*) AS c FROM squares WHERE owner_user_id = ?", (user.id,)).fetchone()["c"]
-                )
+                current_owned_db = db.count_user_squares(conn, user.id)
                 max_setting = max_boxes_per_user
                 if max_setting > 0:
                     remaining_slots = max(0, max_setting - (current_owned_db - len(selected_mine)))
@@ -513,8 +509,8 @@ def page_home(user: db.User | None):
                     if remaining_slots <= 0:
                         skipped_due_to_limit.append(sq_id)
                         continue
-                    current = conn.execute("SELECT owner_user_id FROM squares WHERE id = ?", (sq_id,)).fetchone()
-                    if current and current["owner_user_id"]:
+                    owner = db.get_square_owner_user_id(conn, sq_id)
+                    if owner is not None:
                         skipped.append(sq_id)
                         continue
                     db.set_square_owner(conn, sq_id, user.id)
@@ -522,8 +518,8 @@ def page_home(user: db.User | None):
                     claimed_ids.append(sq_id)
                     remaining_slots -= 1
                 for sq_id in selected_mine:
-                    current = conn.execute("SELECT owner_user_id FROM squares WHERE id = ?", (sq_id,)).fetchone()
-                    if not current or int(current["owner_user_id"] or 0) != user.id:
+                    owner = db.get_square_owner_user_id(conn, sq_id)
+                    if owner != user.id:
                         skipped.append(sq_id)
                         continue
                     db.set_square_owner(conn, sq_id, None)
@@ -657,8 +653,8 @@ def page_pick_boxes(user: db.User):
         with db.db() as conn:
             db.init_db(conn)
             for sq_id in sorted(selected_ids):
-                current = conn.execute("SELECT owner_user_id FROM squares WHERE id = ?", (sq_id,)).fetchone()
-                if current and current["owner_user_id"]:
+                owner = db.get_square_owner_user_id(conn, sq_id)
+                if owner is not None:
                     already_taken.append(sq_id)
                     continue
                 db.set_square_owner(conn, sq_id, user.id)
@@ -721,8 +717,8 @@ def page_my_boxes(user: db.User):
         sq_id = int(pick.lstrip("#"))
         with db.db() as conn:
             db.init_db(conn)
-            current = conn.execute("SELECT owner_user_id FROM squares WHERE id = ?", (sq_id,)).fetchone()
-            if not current or int(current["owner_user_id"] or 0) != user.id:
+            owner = db.get_square_owner_user_id(conn, sq_id)
+            if owner != user.id:
                 st.error("That square is not yours anymore.")
                 st.stop()
             db.set_square_owner(conn, sq_id, None)
@@ -918,7 +914,7 @@ def page_admin(user: db.User):
         st.caption("No claimed squares yet.")
     else:
         with db.db() as conn:
-            users = list(conn.execute("SELECT id, display_name FROM users ORDER BY display_name").fetchall())
+            users = db.list_users_basic(conn)
         user_map = {int(u["id"]): str(u["display_name"]) for u in users}
         sq = st.selectbox(
             "Pick a claimed square",
@@ -945,17 +941,83 @@ def page_admin(user: db.User):
     if st.button("Reset squares + scores", type="secondary"):
         with db.db() as conn:
             db.init_db(conn)
-            conn.execute("UPDATE squares SET owner_user_id = NULL, updated_at_ts = ?", (int(datetime.now().timestamp()),))
-            conn.execute(
-                "UPDATE scores SET rows_score = 0, cols_score = 0, updated_at_ts = ?, updated_by_user_id = NULL",
-                (int(datetime.now().timestamp()),),
-            )
-            db.set_setting(conn, "row_digits_json", "")
-            db.set_setting(conn, "col_digits_json", "")
-            db.set_setting(conn, "board_locked", "0")
+            db.reset_board_keep_users(conn)
             db.log_action(conn, user.id, "reset_board", {})
         st.success("Reset complete.")
         st.rerun()
+
+    st.subheader("Database maintenance")
+    with st.expander("Database tools", expanded=False):
+        if db.using_postgres():
+            st.caption("Backend: Postgres/Neon (`DATABASE_URL`)")
+            st.info("DB file actions are disabled for Postgres. Use Neon backups or pg_dump if you need exports.")
+        else:
+            db_file = db.db_path()
+            st.caption(f"Backend: SQLite (`{db_file}`)")
+            if db_file.exists():
+                try:
+                    size_kb = db_file.stat().st_size / 1024
+                    st.caption(f"DB size: {size_kb:,.1f} KB")
+                except Exception:
+                    pass
+
+                try:
+                    raw = db_file.read_bytes()
+                    st.download_button(
+                        "Download DB backup",
+                        data=raw,
+                        file_name="squares.db",
+                        mime="application/x-sqlite3",
+                        use_container_width=True,
+                    )
+                except Exception:
+                    st.warning("Could not read DB file for download (permissions?).")
+            else:
+                st.info("DB file not found yet (it will be created automatically on first use).")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            vacuum_disabled = db.using_postgres()
+            if st.button("VACUUM / optimize", use_container_width=True, disabled=vacuum_disabled):
+                with db.db() as conn:
+                    db.vacuum_optimize(conn)
+                    db.log_action(conn, user.id, "db_vacuum", {})
+                st.success("Database optimized.")
+                st.rerun()
+            if vacuum_disabled:
+                st.caption("VACUUM is SQLite-only.")
+        with c2:
+            keep_audit = st.number_input("Keep last N audit rows", min_value=0, max_value=50000, value=500, step=50)
+            if st.button("Prune audit log", use_container_width=True):
+                with db.db() as conn:
+                    db.init_db(conn)
+                    db.prune_audit_log(conn, keep_last=int(keep_audit))
+                    db.log_action(conn, user.id, "prune_audit_log", {"keep": int(keep_audit)})
+                st.success("Audit log pruned.")
+                st.rerun()
+
+        st.divider()
+        if db.using_postgres():
+            st.caption("Danger zone is disabled for Postgres. Use Neon console if you need to wipe the DB.")
+        else:
+            st.caption("Danger zone: deletes the DB file and starts fresh (users + board + history).")
+            confirm = st.text_input("Type RESET to confirm", value="", placeholder="RESET")
+            if st.button("Delete DB file and recreate", type="primary", disabled=(confirm.strip() != "RESET")):
+                # Clear session so we don't keep a stale user_id.
+                for k in ("user_id", "nav_page", "home_selected_square_ids", "selected_square_ids"):
+                    st.session_state.pop(k, None)
+
+                paths = [db_file]
+                for suffix in ("-wal", "-shm", "-journal"):
+                    paths.append(Path(str(db_file) + suffix))
+                for p in paths:
+                    try:
+                        if p.exists():
+                            p.unlink()
+                    except Exception:
+                        pass
+                st.success("DB deleted. Reloading…")
+                st.rerun()
 
 
 def main():
@@ -964,6 +1026,24 @@ def main():
         load_dotenv(Path(__file__).resolve().parent / ".env")
 
     st.set_page_config(page_title="Super Bowl Squares", layout="wide")
+
+    # Streamlit secrets → env bridge (so `db.py` can read DATABASE_URL / admin creds).
+    try:
+        secrets = st.secrets  # type: ignore[attr-defined]
+        for key in (
+            "DATABASE_URL",
+            "NEON_DATABASE_URL",
+            "POSTGRES_URL",
+            "POSTGRES_URL_NON_POOLING",
+            "SUPERBOWL_ADMIN_USERNAME",
+            "SUPERBOWL_ADMIN_PASSWORD",
+            "SUPERBOWL_ADMIN_DISPLAY_NAME",
+            "SUPERBOWL_SQUARES_DB_PATH",
+        ):
+            if key in secrets and str(secrets[key]).strip():
+                os.environ.setdefault(key, str(secrets[key]))
+    except Exception:
+        pass
 
     # Initialize DB early (creates file + tables)
     with db.db() as conn:

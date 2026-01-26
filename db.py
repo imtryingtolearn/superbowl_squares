@@ -128,6 +128,9 @@ def _normalize_database_url(url: str) -> str:
         url = "postgresql://" + url[len("postgres://") :]
 
     parsed = urlparse(url)
+    # Prefer psycopg (v3) driver for Python 3.13+ compatibility.
+    if parsed.scheme == "postgresql":
+        parsed = parsed._replace(scheme="postgresql+psycopg")
     q = dict(parse_qsl(parsed.query, keep_blank_values=True))
     q.setdefault("sslmode", "require")
     return urlunparse(parsed._replace(query=urlencode(q)))

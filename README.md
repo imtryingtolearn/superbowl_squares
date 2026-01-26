@@ -35,6 +35,7 @@ Streamlit Community Cloud file storage can be wiped/recreated on redeploys, so f
    - (optional) `SUPERBOWL_ADMIN_DISPLAY_NAME="Tejas"`
 
 Notes:
+- If you paste a Neon URL that starts with `postgres://` or `postgresql://`, the app will automatically normalize it and use the `psycopg` (v3) driver.
 - Include `sslmode=require` in the URL if Neon provides it (the app will also default it on).
 - Admin → Database tools will disable SQLite-only actions when using Postgres.
 

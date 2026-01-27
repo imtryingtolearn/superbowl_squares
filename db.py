@@ -601,13 +601,14 @@ def ensure_admin_from_env(conn: Any) -> int | None:
         conn,
         """
         UPDATE users
-        SET is_admin = 1,
+        SET is_admin = :is_admin,
             salt_b64 = :salt_b64,
             password_hash_b64 = :password_hash_b64,
             display_name = :display_name
         WHERE id = :id
         """,
         {
+            "is_admin": True,
             "salt_b64": salt_b64,
             "password_hash_b64": hash_b64,
             "display_name": display_name or str(row["display_name"]),

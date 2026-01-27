@@ -352,8 +352,22 @@ def render_board_grid(
 
 def load_state():
     with db.db() as conn:
-        version = db.get_state_version(conn)
-    return _load_state_cached(version)
+        # Backwards-compatible: if Streamlit has an older `db` module loaded, don't crash.
+        # A full app restart will pick up the new versioned caching.
+        get_ver = getattr(db, "get_state_version", None)
+        db_version = get_ver(conn) if callable(get_ver) else "legacy"
+    # Extra nonce ensures UI refreshes immediately after writes, even if the DB version
+    # can't be computed (or timestamps collide within the same second).
+    nonce = int(st.session_state.get("_sb_state_nonce", 0))
+    return _load_state_cached(f"{db_version}-{nonce}")
+
+
+def _invalidate_state_cache() -> None:
+    st.session_state["_sb_state_nonce"] = int(st.session_state.get("_sb_state_nonce", 0)) + 1
+    try:
+        _load_state_cached.clear()  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 @st.cache_data(show_spinner=False)
@@ -609,6 +623,7 @@ def page_home(user: db.User | None):
             if skipped_due_to_limit:
                 msg.append(f"skipped {len(skipped_due_to_limit)} (limit reached)")
             st.session_state["home_flash_message"] = "Update: " + (", ".join(msg) if msg else "no changes")
+            _invalidate_state_cache()
             st.rerun()
 
     owners = sorted({(s.get("owner_user_id"), s.get("owner_display_name")) for s in squares if s.get("owner_user_id")})
@@ -748,6 +763,8 @@ def page_pick_boxes(user: db.User):
             )
         else:
             st.session_state["flash_message"] = "No squares were claimed (they were already taken)."
+        if claimed:
+            _invalidate_state_cache()
         st.rerun()
 
     st.caption("Claimed squares will show your name on the board right away.")
@@ -803,6 +820,7 @@ def page_my_boxes(user: db.User):
             db.set_square_owner(conn, sq_id, None)
             db.log_action(conn, user.id, "update_boxes", {"claimed": _audit_ids([]), "released": _audit_ids([sq_id])})
         st.success("Released.")
+        _invalidate_state_cache()
         st.rerun()
 
 
@@ -997,6 +1015,7 @@ def page_admin(user: db.User):
                     {"square_id": sq_id, "previous_owner_user_id": prev_owner, "new_owner_user_id": owner_id},
                 )
             st.success("Done.")
+            _invalidate_state_cache()
             st.rerun()
 
     st.subheader("Reset board (keeps users)")
@@ -1007,6 +1026,7 @@ def page_admin(user: db.User):
             db.reset_board_keep_users(conn)
             db.log_action(conn, user.id, "update_boxes", {"reset_board": True})
         st.success("Reset complete.")
+        _invalidate_state_cache()
         st.rerun()
 
     st.subheader("Database maintenance")
@@ -1063,14 +1083,14 @@ def page_admin(user: db.User):
         else:
             st.caption("Danger zone: deletes the DB file and starts fresh (users + board + history).")
             confirm = st.text_input("Type RESET to confirm", value="", placeholder="RESET")
-        if st.button("Delete DB file and recreate", type="primary", disabled=(confirm.strip() != "RESET")):
-            # Clear session so we don't keep a stale user_id.
-            for k in ("user_id", "nav_page", "home_selected_square_ids", "selected_square_ids", "_sb_bootstrap_done"):
-                st.session_state.pop(k, None)
+            if st.button("Delete DB file and recreate", type="primary", disabled=(confirm.strip() != "RESET")):
+                # Clear session so we don't keep a stale user_id.
+                for k in ("user_id", "nav_page", "home_selected_square_ids", "selected_square_ids", "_sb_bootstrap_done"):
+                    st.session_state.pop(k, None)
 
-            paths = [db_file]
-            for suffix in ("-wal", "-shm", "-journal"):
-                paths.append(Path(str(db_file) + suffix))
+                paths = [db_file]
+                for suffix in ("-wal", "-shm", "-journal"):
+                    paths.append(Path(str(db_file) + suffix))
                 for p in paths:
                     try:
                         if p.exists():

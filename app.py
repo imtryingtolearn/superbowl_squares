@@ -591,7 +591,7 @@ def page_home(user: db.User | None):
             "Clear selection",
             key="home_clear_selection",
             disabled=(len(selected_ids) == 0),
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state["home_selected_square_ids"] = []
             st.rerun()
@@ -602,7 +602,7 @@ def page_home(user: db.User | None):
             key="home_apply_changes",
             type="primary",
             disabled=apply_disabled,
-            use_container_width=True,
+            width="stretch",
         ):
             if max_boxes_per_user > 0 and projected_owned > max_boxes_per_user:
                 st.error(
@@ -707,7 +707,7 @@ def page_home(user: db.User | None):
         if not winners:
             st.caption("No quarter scores entered yet.")
         else:
-            st.dataframe(pd.DataFrame(winners), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(winners), width="stretch", hide_index=True)
 
     with st.expander("Recent activity", expanded=False):
         with db.db() as conn:
@@ -826,7 +826,7 @@ def page_my_boxes(user: db.User):
     for s in mine:
         r, c = game_logic.row_col_from_id(int(s["id"]))
         rows.append({"Square": f"R{r} C{c} (#{s['id']})"})
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     if row_digits and col_digits:
         st.subheader("What digits do I have?")
@@ -843,7 +843,7 @@ def page_my_boxes(user: db.User):
                     f"{settings['team_columns']} digit": col_digits[c],
                 }
             )
-        st.dataframe(pd.DataFrame(enriched), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(enriched), width="stretch", hide_index=True)
 
     if settings["board_locked"]:
         st.info("Board is locked, so squares cannot be released.")
@@ -888,7 +888,7 @@ def page_admin(user: db.User):
                 {"Player": name, "Squares": count}
                 for name, count in sorted(owner_counts.items(), key=lambda x: (-x[1], x[0].lower()))
             ]
-            st.dataframe(pd.DataFrame(players), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(players), width="stretch", hide_index=True)
 
     with st.expander("Game setup", expanded=False):
         with st.form("setup"):
@@ -1082,7 +1082,7 @@ def page_admin(user: db.User):
                         data=raw,
                         file_name="squares.db",
                         mime="application/x-sqlite3",
-                        use_container_width=True,
+                        width="stretch",
                     )
                 except Exception:
                     st.warning("Could not read DB file for download (permissions?).")
@@ -1092,7 +1092,7 @@ def page_admin(user: db.User):
         c1, c2 = st.columns(2)
         with c1:
             vacuum_disabled = db.using_postgres()
-            if st.button("VACUUM / optimize", use_container_width=True, disabled=vacuum_disabled):
+            if st.button("VACUUM / optimize", width="stretch", disabled=vacuum_disabled):
                 with db.db() as conn:
                     db.vacuum_optimize(conn)
                 st.success("Database optimized.")
@@ -1101,7 +1101,7 @@ def page_admin(user: db.User):
                 st.caption("VACUUM is SQLite-only.")
         with c2:
             keep_audit = st.number_input("Keep last N audit rows", min_value=0, max_value=50000, value=500, step=50)
-            if st.button("Prune audit log", use_container_width=True):
+            if st.button("Prune audit log", width="stretch"):
                 with db.db() as conn:
                     db.init_db(conn)
                     db.prune_audit_log(conn, keep_last=int(keep_audit))

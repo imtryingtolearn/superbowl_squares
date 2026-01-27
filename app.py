@@ -407,23 +407,27 @@ def page_auth():
             username = st.text_input("Username", placeholder="username", key="login_username")
             password = st.text_input("Password", type="password", key="login_password")
             submitted = st.form_submit_button("Sign in")
+        login_error: str | None = None
         if submitted:
             with db.db() as conn:
                 row = db.get_user_by_username(conn, username.strip().lower())
                 if not row:
-                    st.error("No such user.")
-                    st.stop()
-                if not security.verify_password(
+                    login_error = "No such user."
+                elif not security.verify_password(
                     password,
                     salt_b64=str(row["salt_b64"]),
                     password_hash_b64=str(row["password_hash_b64"]),
                 ):
-                    st.error("Wrong password.")
-                    st.stop()
-                st.session_state["user_id"] = int(row["id"])
-                st.session_state["nav_page"] = "Home"
-            st.success("Signed in.")
-            st.rerun()
+                    login_error = "Wrong password."
+                else:
+                    st.session_state["user_id"] = int(row["id"])
+                    st.session_state["nav_page"] = "Home"
+            if login_error:
+                # Don't `st.stop()` here — it prevents the Create account tab from rendering on the same run.
+                st.error(login_error)
+            else:
+                st.success("Signed in.")
+                st.rerun()
 
     with tab2:
         st.caption("Keep it simple: pick a username your friends will recognize.")

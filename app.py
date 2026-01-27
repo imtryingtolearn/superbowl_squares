@@ -502,7 +502,7 @@ def page_home(user: db.User | None):
 
     st.subheader("Board")
     if user and not settings["board_locked"]:
-        st.caption("Tap open squares (·) to select them. Tap your own squares to select them for release.")
+        st.caption("Tap open squares to select them. Tap your own squares to select them for release.")
     elif user and settings["board_locked"]:
         st.caption("Board is locked. You can still see highlights, but changes are disabled.")
     else:

@@ -514,6 +514,40 @@ def list_users_basic(conn: Any) -> list[dict[str, Any]]:
     return _fetchall(conn, "SELECT id, display_name FROM users ORDER BY display_name")
 
 
+def list_users_admin(conn: Any) -> list[dict[str, Any]]:
+    return _fetchall(
+        conn,
+        "SELECT id, username, display_name, is_admin, created_at_ts FROM users ORDER BY LOWER(display_name), LOWER(username)",
+    )
+
+
+def set_user_password(conn: Any, *, user_id: int, salt_b64: str, password_hash_b64: str) -> None:
+    _execute(
+        conn,
+        """
+        UPDATE users
+        SET salt_b64 = :salt_b64,
+            password_hash_b64 = :password_hash_b64
+        WHERE id = :id
+        """,
+        {"salt_b64": salt_b64, "password_hash_b64": password_hash_b64, "id": int(user_id)},
+    )
+
+
+def delete_user_and_cleanup(conn: Any, *, user_id: int) -> int:
+    uid = int(user_id)
+    released = count_user_squares(conn, uid)
+    _execute(conn, "UPDATE squares SET owner_user_id = NULL, updated_at_ts = :ts WHERE owner_user_id = :id", {"ts": _now_ts(), "id": uid})
+    _execute(
+        conn,
+        "UPDATE scores SET updated_by_user_id = NULL, updated_at_ts = :ts WHERE updated_by_user_id = :id",
+        {"ts": _now_ts(), "id": uid},
+    )
+    _execute(conn, "UPDATE audit_log SET actor_user_id = NULL WHERE actor_user_id = :id", {"id": uid})
+    _execute(conn, "DELETE FROM users WHERE id = :id", {"id": uid})
+    return released
+
+
 def reset_board_keep_users(conn: Any) -> None:
     now = _now_ts()
     _execute(conn, "UPDATE squares SET owner_user_id = NULL, updated_at_ts = :ts", {"ts": now})

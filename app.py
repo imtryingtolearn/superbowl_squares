@@ -24,6 +24,14 @@ _GLOBAL_CSS = """
 div[data-testid="stElementContainer"] {
   border-radius: 0.85rem;
 }
+
+/* Compact action buttons (Home: Clear selection / Apply changes) */
+#st-key-home_clear_selection button,
+#st-key-home_apply_changes button {
+  padding: 0.25rem 0.6rem !important;
+  min-height: 2.1rem !important;
+  font-size: 0.9rem !important;
+}
 </style>
 """
 
@@ -253,6 +261,7 @@ def render_board_grid(
     on_toggle_select=None,
     allow_toggle_own: bool = True,
     highlight_user_id: int | None = None,
+    winning_squares: dict[int, list[int]] | None = None,
 ) -> None:
     scope_id = f"sb-grid-{grid_key_prefix}"
     scope_selector = f"div[data-testid='stVerticalBlock']:has(#{scope_id})"
@@ -262,6 +271,7 @@ def render_board_grid(
     row_labels = row_digits if row_digits else ["?"] * 10
     col_labels = col_digits if col_digits else ["?"] * 10
     selected_ids = selected_ids or set()
+    winning_squares = winning_squares or {}
 
     container.markdown(f"<div id='{scope_id}'></div>", unsafe_allow_html=True)
     container.markdown(_GRID_CSS.replace("__SCOPE__", scope_selector), unsafe_allow_html=True)
@@ -302,6 +312,9 @@ def render_board_grid(
             owner_id = sq.get("owner_user_id")
             owner_name = sq.get("owner_display_name") or ""
             is_selected = int(sq_id) in selected_ids
+            winner_quarters = winning_squares.get(int(sq_id), [])
+            is_winner = bool(winner_quarters)
+            winner_suffix = f" | Winner Q{','.join(str(q) for q in sorted(winner_quarters))}" if is_winner else ""
 
             can_toggle_open = bool(on_toggle_select) and (not owner_id)
             can_toggle_own = (
@@ -324,6 +337,9 @@ def render_board_grid(
                 else:
                     help_txt = owner_name
                     button_type = "secondary"
+                if is_winner:
+                    label = (f"⭐{label}")[:6]
+                    help_txt = f"{help_txt}{winner_suffix}"
             else:
                 label = "✓" if (is_selected and can_toggle_open and not click_to_claim) else "☐"
                 if click_to_claim:
@@ -333,6 +349,9 @@ def render_board_grid(
                 else:
                     help_txt = "Open"
                 button_type = "tertiary"
+                if is_winner and not is_selected:
+                    label = "⭐"
+                    help_txt = f"{help_txt}{winner_suffix}"
 
             disabled = (bool(owner_id) and not can_toggle) or (not click_to_claim and not can_toggle)
             clicked = _button(
@@ -487,6 +506,22 @@ def page_home(user: db.User | None):
     except ValueError:
         max_boxes_per_user = 0
 
+    winning_squares: dict[int, list[int]] = {}
+    if row_digits and col_digits:
+        with db.db() as conn:
+            for q in (1, 2, 3, 4):
+                score = db.get_score(conn, q)
+                # Only highlight once an admin has entered a score for that quarter.
+                if score.get("updated_by_user_id") is None:
+                    continue
+                win_sq = game_logic.compute_winner_square_id(
+                    rows_score=int(score["rows_score"]),
+                    cols_score=int(score["cols_score"]),
+                    row_digits=row_digits,
+                    col_digits=col_digits,
+                )
+                winning_squares.setdefault(int(win_sq), []).append(int(q))
+
     st.header("Super Bowl Squares")
     st.write(
         "Claim a box (or a few). Digits get assigned later, so pick based on vibes, not math. "
@@ -540,6 +575,7 @@ def page_home(user: db.User | None):
         on_toggle_select=_toggle_select if can_edit else None,
         allow_toggle_own=True,
         highlight_user_id=user.id if user else None,
+        winning_squares=winning_squares,
     )
 
     if can_edit and user:
@@ -551,12 +587,23 @@ def page_home(user: db.User | None):
         delta = projected_owned - current_owned
         c1.metric("Your boxes", str(projected_owned), delta=(f"{delta:+d}" if delta else None))
         c2.markdown(f"Will claim: `{len(selected_open)}`  \nWill release: `{len(selected_mine)}`")
-        if c3.button("Clear selection", disabled=(len(selected_ids) == 0), use_container_width=True):
+        if c3.button(
+            "Clear selection",
+            key="home_clear_selection",
+            disabled=(len(selected_ids) == 0),
+            use_container_width=True,
+        ):
             st.session_state["home_selected_square_ids"] = []
             st.rerun()
 
         apply_disabled = (len(selected_open) == 0) and (len(selected_mine) == 0)
-        if c4.button("Apply changes", type="primary", disabled=apply_disabled, use_container_width=True):
+        if c4.button(
+            "Apply changes",
+            key="home_apply_changes",
+            type="primary",
+            disabled=apply_disabled,
+            use_container_width=True,
+        ):
             if max_boxes_per_user > 0 and projected_owned > max_boxes_per_user:
                 st.error(
                     f"Max is {max_boxes_per_user} squares per person. "
@@ -630,19 +677,6 @@ def page_home(user: db.User | None):
             _invalidate_state_cache()
             st.rerun()
 
-    owners = sorted({(s.get("owner_user_id"), s.get("owner_display_name")) for s in squares if s.get("owner_user_id")})
-    if owners:
-        st.write("Owners:")
-        st.write(", ".join(sorted({str(name) for _, name in owners if name})))
-
-    st.subheader("Digits")
-    if row_digits and col_digits:
-        st.write(
-            f"Rows ({settings['team_rows']}): {row_digits}  |  Columns ({settings['team_columns']}): {col_digits}"
-        )
-    else:
-        st.info("Digits have not been assigned yet (that is normal).")
-
     st.subheader("Quarter winners")
     if not (row_digits and col_digits):
         st.caption("Winners show up after digits are assigned and scores are entered.")
@@ -651,6 +685,8 @@ def page_home(user: db.User | None):
             winners = []
             for q in (1, 2, 3, 4):
                 score = db.get_score(conn, q)
+                if score.get("updated_by_user_id") is None:
+                    continue
                 win_sq = game_logic.compute_winner_square_id(
                     rows_score=int(score["rows_score"]),
                     cols_score=int(score["cols_score"]),
@@ -668,7 +704,10 @@ def page_home(user: db.User | None):
                         "Winner": win_owner or "(unclaimed)",
                     }
                 )
-        st.dataframe(pd.DataFrame(winners), use_container_width=True, hide_index=True)
+        if not winners:
+            st.caption("No quarter scores entered yet.")
+        else:
+            st.dataframe(pd.DataFrame(winners), use_container_width=True, hide_index=True)
 
     with st.expander("Recent activity", expanded=False):
         with db.db() as conn:
@@ -828,69 +867,6 @@ def page_my_boxes(user: db.User):
         st.rerun()
 
 
-def page_scores(user: db.User | None):
-    settings, squares, row_digits, col_digits = load_state()
-    st.header("Scores")
-    st.caption("Admin enters quarter-end scores. Everyone can view.")
-
-    if row_digits and col_digits:
-        st.info(
-            f"Winner is: row digit = {settings['team_rows']} last digit, col digit = {settings['team_columns']} last digit."
-        )
-    else:
-        st.warning("Digits are not assigned yet, so winners cannot be computed.")
-
-    with db.db() as conn:
-        scores = [db.get_score(conn, q) for q in (1, 2, 3, 4)]
-
-    table = []
-    for s in scores:
-        table.append(
-            {
-                "Quarter": int(s["quarter"]),
-                settings["team_rows"]: int(s["rows_score"]),
-                settings["team_columns"]: int(s["cols_score"]),
-                "Updated": _ts_to_str(int(s["updated_at_ts"])),
-            }
-        )
-    st.dataframe(pd.DataFrame(table), use_container_width=True, hide_index=True)
-
-    if not (user and user.is_admin):
-        return
-
-    st.subheader("Update a quarter")
-    with st.form("update_score"):
-        quarter = st.selectbox("Quarter", [1, 2, 3, 4], index=0)
-        rows_score = st.number_input(f"{settings['team_rows']} score", min_value=0, max_value=99, value=0, step=1)
-        cols_score = st.number_input(f"{settings['team_columns']} score", min_value=0, max_value=99, value=0, step=1)
-        submitted = st.form_submit_button("Save score")
-    if submitted:
-        with db.db() as conn:
-            db.init_db(conn)
-            db.set_score(conn, quarter=int(quarter), rows_score=int(rows_score), cols_score=int(cols_score), updated_by_user_id=user.id)
-        st.success("Saved.")
-        st.rerun()
-
-    if row_digits and col_digits:
-        st.subheader("Winners (based on current scores)")
-        winners = []
-        for q in (1, 2, 3, 4):
-            with db.db() as conn:
-                score = db.get_score(conn, q)
-            win_sq = game_logic.compute_winner_square_id(
-                rows_score=int(score["rows_score"]),
-                cols_score=int(score["cols_score"]),
-                row_digits=row_digits,
-                col_digits=col_digits,
-            )
-            win_owner = next((s.get("owner_display_name") for s in squares if int(s["id"]) == win_sq), None)
-            r, c = game_logic.row_col_from_id(win_sq)
-            winners.append(
-                {"Quarter": q, "Winning square": f"R{r} C{c} (#{win_sq})", "Winner": win_owner or "(unclaimed)"}
-            )
-        st.dataframe(pd.DataFrame(winners), use_container_width=True, hide_index=True)
-
-
 def page_admin(user: db.User):
     require_admin(user)
     settings, squares, row_digits, col_digits = load_state()
@@ -898,143 +874,194 @@ def page_admin(user: db.User):
     st.header("Admin")
     st.caption("You are the referee. No pressure.")
 
-    st.subheader("Game setup")
-    with st.form("setup"):
-        team_rows = st.text_input("Rows team name", value=settings["team_rows"])
-        team_cols = st.text_input("Columns team name", value=settings["team_columns"])
-        price = st.number_input("Price per square", min_value=0, max_value=1000, value=int(settings["price_per_square"]), step=1)
-        try:
-            max_boxes = int(str(settings.get("max_boxes_per_user") or "0"))
-        except ValueError:
-            max_boxes = 0
-        max_boxes = st.number_input(
-            "Max squares per person (0 = unlimited)",
-            min_value=0,
-            max_value=100,
-            value=int(max_boxes),
-            step=1,
-        )
-        board_locked = st.checkbox("Lock board (prevents claiming/releasing)", value=bool(settings["board_locked"]))
-        submitted = st.form_submit_button("Save settings")
-    if submitted:
-        with db.db() as conn:
-            db.init_db(conn)
-            db.set_setting(conn, "team_rows", team_rows.strip() or "Away")
-            db.set_setting(conn, "team_columns", team_cols.strip() or "Home")
-            db.set_setting(conn, "price_per_square", str(int(price)))
-            db.set_setting(conn, "max_boxes_per_user", str(int(max_boxes)))
-            db.set_setting(conn, "board_locked", "1" if board_locked else "0")
-        st.success("Saved.")
-        st.rerun()
+    with st.expander("Players", expanded=False):
+        owner_counts: dict[str, int] = {}
+        for s in squares:
+            name = str(s.get("owner_display_name") or "").strip()
+            if not name:
+                continue
+            owner_counts[name] = owner_counts.get(name, 0) + 1
+        if not owner_counts:
+            st.caption("No claimed squares yet.")
+        else:
+            players = [
+                {"Player": name, "Squares": count}
+                for name, count in sorted(owner_counts.items(), key=lambda x: (-x[1], x[0].lower()))
+            ]
+            st.dataframe(pd.DataFrame(players), use_container_width=True, hide_index=True)
 
-    st.subheader("Digits assignment")
-    if row_digits and col_digits:
-        st.write(f"Rows digits: {row_digits}")
-        st.write(f"Columns digits: {col_digits}")
-    else:
-        st.info("Digits not assigned yet.")
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("Randomize rows + columns"):
-            digits = list(range(10))
-            rd = digits[:]
-            cd = digits[:]
-            random.shuffle(rd)
-            random.shuffle(cd)
+    with st.expander("Game setup", expanded=False):
+        with st.form("setup"):
+            team_rows = st.text_input("Rows team name", value=settings["team_rows"])
+            team_cols = st.text_input("Columns team name", value=settings["team_columns"])
+            price = st.number_input(
+                "Price per square", min_value=0, max_value=1000, value=int(settings["price_per_square"]), step=1
+            )
+            try:
+                max_boxes = int(str(settings.get("max_boxes_per_user") or "0"))
+            except ValueError:
+                max_boxes = 0
+            max_boxes = st.number_input(
+                "Max squares per person (0 = unlimited)",
+                min_value=0,
+                max_value=100,
+                value=int(max_boxes),
+                step=1,
+            )
+            board_locked = st.checkbox("Lock board (prevents claiming/releasing)", value=bool(settings["board_locked"]))
+            submitted = st.form_submit_button("Save settings")
+        if submitted:
             with db.db() as conn:
                 db.init_db(conn)
-                db.set_setting(conn, "row_digits_json", game_logic.digits_to_json(rd))
-                db.set_setting(conn, "col_digits_json", game_logic.digits_to_json(cd))
-            st.success("Digits assigned.")
-            st.rerun()
-    with c2:
-        if st.button("Randomize rows only"):
-            digits = list(range(10))
-            rd = digits[:]
-            random.shuffle(rd)
-            cd = col_digits if col_digits else digits[:]
-            if not col_digits:
-                random.shuffle(cd)
-            with db.db() as conn:
-                db.init_db(conn)
-                db.set_setting(conn, "row_digits_json", game_logic.digits_to_json(rd))
-                db.set_setting(conn, "col_digits_json", game_logic.digits_to_json(cd))
-            st.success("Rows digits randomized.")
-            st.rerun()
-    with c3:
-        if st.button("Randomize columns only"):
-            digits = list(range(10))
-            cd = digits[:]
-            random.shuffle(cd)
-            rd = row_digits if row_digits else digits[:]
-            if not row_digits:
-                random.shuffle(rd)
-            with db.db() as conn:
-                db.init_db(conn)
-                db.set_setting(conn, "row_digits_json", game_logic.digits_to_json(rd))
-                db.set_setting(conn, "col_digits_json", game_logic.digits_to_json(cd))
-            st.success("Columns digits randomized.")
-            st.rerun()
-
-    st.caption("Digits map score last-digits (0-9) to the board edges. Randomize once you're ready.")
-
-    if st.button("Clear digits", type="secondary"):
-        with db.db() as conn:
-            db.init_db(conn)
-            db.set_setting(conn, "row_digits_json", "")
-            db.set_setting(conn, "col_digits_json", "")
-        st.success("Cleared.")
-        st.rerun()
-
-    st.subheader("Manual square reassignment")
-    taken = [s for s in squares if s.get("owner_user_id")]
-    if not taken:
-        st.caption("No claimed squares yet.")
-    else:
-        with db.db() as conn:
-            users = db.list_users_basic(conn)
-        user_map = {int(u["id"]): str(u["display_name"]) for u in users}
-        sq = st.selectbox(
-            "Pick a claimed square",
-            [f"#{int(s['id'])} ({s.get('owner_display_name')})" for s in taken],
-        )
-        new_owner = st.selectbox(
-            "Reassign to",
-            ["(unclaimed)"] + [f"{name} (id={uid})" for uid, name in sorted(user_map.items(), key=lambda x: x[1].lower())],
-        )
-        if st.button("Reassign square"):
-            sq_id = int(sq.split()[0].lstrip("#"))
-            owner_id = None
-            if new_owner != "(unclaimed)":
-                owner_id = int(new_owner.split("id=")[-1].rstrip(")"))
-            with db.db() as conn:
-                db.init_db(conn)
-                prev_owner = db.get_square_owner_user_id(conn, sq_id)
-                db.set_square_owner(conn, sq_id, owner_id)
-                db.log_action(
-                    conn,
-                    user.id,
-                    "update_boxes",
-                    {"square_id": sq_id, "previous_owner_user_id": prev_owner, "new_owner_user_id": owner_id},
-                )
-            st.success("Done.")
+                db.set_setting(conn, "team_rows", team_rows.strip() or "Away")
+                db.set_setting(conn, "team_columns", team_cols.strip() or "Home")
+                db.set_setting(conn, "price_per_square", str(int(price)))
+                db.set_setting(conn, "max_boxes_per_user", str(int(max_boxes)))
+                db.set_setting(conn, "board_locked", "1" if board_locked else "0")
+            st.success("Saved.")
             _invalidate_state_cache()
             st.rerun()
 
-    st.subheader("Reset board (keeps users)")
-    st.caption("Use this if you want to reuse the app next year without deleting accounts.")
-    if st.button("Reset squares + scores", type="secondary"):
-        with db.db() as conn:
-            db.init_db(conn)
-            db.reset_board_keep_users(conn)
-            db.log_action(conn, user.id, "update_boxes", {"reset_board": True})
-        st.success("Reset complete.")
-        _invalidate_state_cache()
-        st.rerun()
+    with st.expander("Digits assignment", expanded=False):
+        if row_digits and col_digits:
+            st.write(f"Rows digits: {row_digits}")
+            st.write(f"Columns digits: {col_digits}")
+        else:
+            st.info("Digits not assigned yet.")
 
-    st.subheader("Database maintenance")
-    with st.expander("Database tools", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button("Randomize rows + columns"):
+                digits = list(range(10))
+                rd = digits[:]
+                cd = digits[:]
+                random.shuffle(rd)
+                random.shuffle(cd)
+                with db.db() as conn:
+                    db.init_db(conn)
+                    db.set_setting(conn, "row_digits_json", game_logic.digits_to_json(rd))
+                    db.set_setting(conn, "col_digits_json", game_logic.digits_to_json(cd))
+                st.success("Digits assigned.")
+                _invalidate_state_cache()
+                st.rerun()
+        with c2:
+            if st.button("Randomize rows only"):
+                digits = list(range(10))
+                rd = digits[:]
+                random.shuffle(rd)
+                cd = col_digits if col_digits else digits[:]
+                if not col_digits:
+                    random.shuffle(cd)
+                with db.db() as conn:
+                    db.init_db(conn)
+                    db.set_setting(conn, "row_digits_json", game_logic.digits_to_json(rd))
+                    db.set_setting(conn, "col_digits_json", game_logic.digits_to_json(cd))
+                st.success("Rows digits randomized.")
+                _invalidate_state_cache()
+                st.rerun()
+        with c3:
+            if st.button("Randomize columns only"):
+                digits = list(range(10))
+                cd = digits[:]
+                random.shuffle(cd)
+                rd = row_digits if row_digits else digits[:]
+                if not row_digits:
+                    random.shuffle(rd)
+                with db.db() as conn:
+                    db.init_db(conn)
+                    db.set_setting(conn, "row_digits_json", game_logic.digits_to_json(rd))
+                    db.set_setting(conn, "col_digits_json", game_logic.digits_to_json(cd))
+                st.success("Columns digits randomized.")
+                _invalidate_state_cache()
+                st.rerun()
+
+        st.caption("Digits map score last-digits (0-9) to the board edges. Randomize once you're ready.")
+
+        if st.button("Clear digits", type="secondary"):
+            with db.db() as conn:
+                db.init_db(conn)
+                db.set_setting(conn, "row_digits_json", "")
+                db.set_setting(conn, "col_digits_json", "")
+            st.success("Cleared.")
+            _invalidate_state_cache()
+            st.rerun()
+
+    with st.expander("Update Scores", expanded=False):
+        st.caption("Admin enters quarter-end scores. Everyone can see winners on the Home page.")
+        with st.form("admin_update_score"):
+            quarter = st.selectbox("Quarter", [1, 2, 3, 4], index=0)
+            rows_score = st.number_input(
+                f"{settings['team_rows']} score", min_value=0, max_value=99, value=0, step=1, key="admin_rows_score"
+            )
+            cols_score = st.number_input(
+                f"{settings['team_columns']} score", min_value=0, max_value=99, value=0, step=1, key="admin_cols_score"
+            )
+            submitted = st.form_submit_button("Save score")
+        if submitted:
+            with db.db() as conn:
+                db.init_db(conn)
+                db.set_score(
+                    conn,
+                    quarter=int(quarter),
+                    rows_score=int(rows_score),
+                    cols_score=int(cols_score),
+                    updated_by_user_id=user.id,
+                )
+            st.success("Saved.")
+            _invalidate_state_cache()
+            st.rerun()
+
+    with st.expander("Manual square reassignment", expanded=False):
+        taken = [s for s in squares if s.get("owner_user_id")]
+        if not taken:
+            st.caption("No claimed squares yet.")
+        else:
+            with db.db() as conn:
+                users = db.list_users_basic(conn)
+            user_map = {int(u["id"]): str(u["display_name"]) for u in users}
+            sq = st.selectbox(
+                "Pick a claimed square",
+                [f"#{int(s['id'])} ({s.get('owner_display_name')})" for s in taken],
+            )
+            new_owner = st.selectbox(
+                "Reassign to",
+                ["(unclaimed)"]
+                + [
+                    f"{name} (id={uid})"
+                    for uid, name in sorted(user_map.items(), key=lambda x: x[1].lower())
+                ],
+            )
+            if st.button("Reassign square"):
+                sq_id = int(sq.split()[0].lstrip("#"))
+                owner_id = None
+                if new_owner != "(unclaimed)":
+                    owner_id = int(new_owner.split("id=")[-1].rstrip(")"))
+                with db.db() as conn:
+                    db.init_db(conn)
+                    prev_owner = db.get_square_owner_user_id(conn, sq_id)
+                    db.set_square_owner(conn, sq_id, owner_id)
+                    db.log_action(
+                        conn,
+                        user.id,
+                        "update_boxes",
+                        {"square_id": sq_id, "previous_owner_user_id": prev_owner, "new_owner_user_id": owner_id},
+                    )
+                st.success("Done.")
+                _invalidate_state_cache()
+                st.rerun()
+
+    with st.expander("Reset board (keeps users)", expanded=False):
+        st.caption("Use this if you want to reuse the app next year without deleting accounts.")
+        if st.button("Reset squares + scores", type="secondary"):
+            with db.db() as conn:
+                db.init_db(conn)
+                db.reset_board_keep_users(conn)
+                db.log_action(conn, user.id, "update_boxes", {"reset_board": True})
+            st.success("Reset complete.")
+            _invalidate_state_cache()
+            st.rerun()
+
+    with st.expander("Database maintenance", expanded=False):
         if db.using_postgres():
             st.caption("Backend: Postgres/Neon (`DATABASE_URL`)")
             st.info("DB file actions are disabled for Postgres. Use Neon backups or pg_dump if you need exports.")
@@ -1102,7 +1129,75 @@ def page_admin(user: db.User):
                     except Exception:
                         pass
                 st.success("DB deleted. Reloading…")
+                _invalidate_state_cache()
                 st.rerun()
+
+    with st.expander("User management", expanded=False):
+        st.caption("Admin-only. You can reset a password or delete an account (their squares will be released).")
+        with db.db() as conn:
+            users = db.list_users_admin(conn)
+        if not users:
+            st.info("No users found.")
+        else:
+            user_by_id = {int(u["id"]): u for u in users}
+            options = []
+            for urow in users:
+                label = f"{urow['display_name']} (@{urow['username']})"
+                if bool(urow["is_admin"]):
+                    label += " [admin]"
+                options.append((label, int(urow["id"])))
+            options.sort(key=lambda x: x[0].lower())
+
+            pick_label = st.selectbox("Pick a user", [o[0] for o in options], key="admin_user_pick")
+            target_id = next(uid for lbl, uid in options if lbl == pick_label)
+            target = user_by_id[target_id]
+
+            st.write(
+                f"Selected: **{target['display_name']}** (`@{target['username']}`) "
+                f"{'(admin)' if bool(target['is_admin']) else ''}"
+            )
+
+            is_self = int(target_id) == int(user.id)
+            is_target_admin = bool(target.get("is_admin"))
+
+            st.divider()
+            st.subheader("Reset password")
+            with st.form("admin_reset_password"):
+                pw1 = st.text_input("New password", type="password", key="admin_pw1")
+                pw2 = st.text_input("Confirm new password", type="password", key="admin_pw2")
+                submitted = st.form_submit_button("Update password", type="primary", disabled=is_self)
+            if submitted:
+                if len(pw1) < 6:
+                    st.error("Password must be at least 6 characters.")
+                    st.stop()
+                if pw1 != pw2:
+                    st.error("Passwords do not match.")
+                    st.stop()
+                salt_b64, hash_b64 = security.hash_password(pw1)
+                with db.db() as conn:
+                    db.set_user_password(conn, user_id=target_id, salt_b64=salt_b64, password_hash_b64=hash_b64)
+                st.success("Password updated.")
+
+            if is_self:
+                st.caption("You can't reset your own password here (use env vars or sign in/out flow).")
+
+            st.divider()
+            st.subheader("Delete user")
+            st.caption("This releases their squares and removes their account. This cannot be undone.")
+            confirm = st.text_input("Type DELETE to confirm", value="", key="admin_delete_confirm", placeholder="DELETE")
+            delete_disabled = is_self or is_target_admin or (confirm.strip() != "DELETE")
+            if st.button("Delete user", type="primary", disabled=delete_disabled):
+                with db.db() as conn:
+                    released = db.delete_user_and_cleanup(conn, user_id=target_id)
+                    db.log_action(conn, user.id, "update_boxes", {"admin_deleted_user_id": int(target_id), "released_squares": int(released)})
+                st.success(f"Deleted user. Released {released} square(s).")
+                _invalidate_state_cache()
+                st.rerun()
+
+            if is_target_admin:
+                st.caption("Deleting admin users is disabled.")
+            if is_self:
+                st.caption("Deleting your own account is disabled.")
 
 
 def main():
@@ -1148,7 +1243,7 @@ def main():
         page_auth()
         return
 
-    valid_pages = ["Home", "Sign in / Register", "Scores", "Admin"]
+    valid_pages = ["Home", "Admin"]
     if st.session_state.get("nav_page") not in valid_pages:
         st.session_state["nav_page"] = "Home"
 
@@ -1162,22 +1257,22 @@ def main():
         else:
             st.write("Not signed in.")
 
+        nav_options = ["Home"]
+        if user and user.is_admin:
+            nav_options.append("Admin")
         page = st.radio(
             "Go to",
-            options=["Home", "Sign in / Register", "Scores", "Admin"],
+            options=nav_options,
             key="nav_page",
         )
 
-    if page == "Sign in / Register":
-        page_auth()
-        return
+    # If a non-admin somehow has Admin selected (old session state), bounce them back.
+    if st.session_state.get("nav_page") == "Admin" and not (user and user.is_admin):
+        st.session_state["nav_page"] = "Home"
+        st.rerun()
 
     if page == "Home":
         page_home(user)
-        return
-
-    if page == "Scores":
-        page_scores(user)
         return
 
     if page == "Admin":

@@ -598,7 +598,7 @@ def page_home(user: db.User | None):
 
         apply_disabled = (len(selected_open) == 0) and (len(selected_mine) == 0)
         if c4.button(
-            "Apply changes",
+            "Submit",
             key="home_apply_changes",
             type="primary",
             disabled=apply_disabled,

@@ -522,7 +522,7 @@ def page_home(user: db.User | None):
                 )
                 winning_squares.setdefault(int(win_sq), []).append(int(q))
 
-    st.header("Super Bowl Squares")
+    st.header("2026 EMCO Super Bowl LX Squares")
     st.write(
         "Claim a box (or a few). Digits get assigned later, so pick based on vibes, not math. "
         "When scores update each quarter, we will highlight the winning square."

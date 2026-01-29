@@ -411,7 +411,7 @@ def _load_state_cached(_version: str):
 def page_auth():
     st.header("Welcome")
     st.write(
-        "This is a simple Super Bowl squares board for friends and family. "
+        "The 2026 EMCO Super Bowl LX squares board for friends and family. "
         "Make an account, claim your squares, and check back during the game for quarter winners."
     )
 
